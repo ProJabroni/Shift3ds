@@ -16,9 +16,10 @@ jobs:
 
       - name: Install tools
         run: |
-          apt-get update
-          apt-get install -y git build-essential cmake pkg-config python3
-          dkp-pacman -Syu --noconfirm 3ds-dev
+          retry() { for n in 1 2 3 4; do "$@" && return 0; echo "retry $n: $*"; sleep 10; done; return 1; }
+          retry apt-get update
+          retry apt-get install -y git build-essential cmake pkg-config python3
+          retry dkp-pacman -Syu --noconfirm 3ds-dev
 
       - name: Build makerom
         run: |
