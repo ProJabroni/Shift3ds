@@ -13,6 +13,7 @@ enum { SCR_TITLE, SCR_PLAY, SCR_END };
 
 static C2D_TextBuf g_textBuf;
 static bool g_rot;   // when true, rect()/tri() draw the room rotated 180 degrees
+static float g_shift; // horizontal parallax offset (pixels) applied to rect()/tri()
 
 static inline u32 rgb(int r, int g, int b) { return C2D_Color32(r, g, b, 255); }
 static inline u32 rgba(int r, int g, int b, int a) { return C2D_Color32(r, g, b, a); }
@@ -20,7 +21,7 @@ static inline u32 rgba(int r, int g, int b, int a) { return C2D_Color32(r, g, b,
 static void rect(float x, float y, float w, float h, float z, u32 c)
 {
     if (g_rot) { x = TOP_W - (x + w); y = SCR_H - (y + h); }
-    C2D_DrawRectSolid(x, y, z, w, h, c);
+    C2D_DrawRectSolid(x + g_shift, y, z, w, h, c);
 }
 
 static void tri(float x0, float y0, float x1, float y1, float x2, float y2, float z, u32 c)
@@ -30,7 +31,7 @@ static void tri(float x0, float y0, float x1, float y1, float x2, float y2, floa
         x1 = TOP_W - x1; y1 = SCR_H - y1;
         x2 = TOP_W - x2; y2 = SCR_H - y2;
     }
-    C2D_DrawTriangle(x0, y0, c, x1, y1, c, x2, y2, c, z);
+    C2D_DrawTriangle(x0 + g_shift, y0, c, x1 + g_shift, y1, c, x2 + g_shift, y2, c, z);
 }
 
 // Draws text; align: -1 left, 0 centered on x, 1 right-aligned to x.
@@ -59,12 +60,18 @@ static bool is_solid_char(const Game *g, int tx, int ty)
     return c == '#' || (c == 'L' && g->keysLeft > 0);
 }
 
-static void draw_level(const Game *g)
+// eye: +1 = left eye, -1 = right eye. slider: 0..1 from the 3D slider.
+// Each layer gets a parallax of (eye * slider * depth) pixels: bigger depth pops
+// further out of the screen. The background stays on the screen plane.
+#define LAYER(d) (g_shift = eye * slider * (d))
+
+static void draw_level(const Game *g, float eye, float slider)
 {
     bool f = g->flip;
     u32 bg = bg_color(f), fg = fg_color(f);
     g_rot = f;
-    rect(0, 0, TOP_W, SCR_H, 0.0f, bg);
+    LAYER(0);
+    rect(-16, -16, TOP_W + 32, SCR_H + 32, 0.0f, bg);
 
     for (int ty = 0; ty < GH; ty++) {
         for (int tx = 0; tx < GW; tx++) {
@@ -72,9 +79,11 @@ static void draw_level(const Game *g)
             float x = tx * TILE, y = ty * TILE;
             switch (c) {
             case '#':
+                LAYER(3);
                 rect(x, y, TILE, TILE, 0.1f, fg);
                 break;
             case 'L':
+                LAYER(3);
                 if (g->keysLeft > 0) {          // locked: striped block
                     rect(x, y, TILE, TILE, 0.1f, fg);
                     rect(x + 3, y + 3, TILE - 6, TILE - 6, 0.11f, bg);
@@ -82,6 +91,7 @@ static void draw_level(const Game *g)
                 }
                 break;
             case '^': {
+                LAYER(5);
                 // Point away from the neighbouring solid tile.
                 bool onFloor = is_solid_char(g, tx, ty + 1);
                 bool onCeil  = is_solid_char(g, tx, ty - 1);
@@ -93,11 +103,13 @@ static void draw_level(const Game *g)
                 break;
             }
             case 'k':                            // key: ring with a bar
+                LAYER(7);
                 rect(x + 3, y + 3, 10, 10, 0.2f, fg);
                 rect(x + 5, y + 5, 6, 6, 0.21f, bg);
                 rect(x + 7, y + 7, 2, 2, 0.22f, fg);
                 break;
             case 'E':                            // door
+                LAYER(5);
                 rect(x + 1, y, TILE - 2, TILE, 0.1f, fg);
                 rect(x + 3, y + 2, TILE - 6, TILE - 2, 0.11f, bg);
                 rect(x + 9, y + 8, 2, 2, 0.12f, fg);
@@ -110,6 +122,7 @@ static void draw_level(const Game *g)
     // Player: orange block, eyes toward the floor side.
     u32 body = rgb(255, 140, 20);
     if (g->state == ST_DEAD) body = rgb(200, 40, 40);
+    LAYER(9);
     rect(g->px, g->py, PW, PH, 0.3f, body);
     rect(g->px + 3, g->py + 3, 2, 3, 0.31f, rgb(20, 20, 24));
     rect(g->px + 7, g->py + 3, 2, 3, 0.31f, rgb(20, 20, 24));
@@ -119,13 +132,16 @@ static void draw_level(const Game *g)
         u32 old = bg_color(!f);
         int a = g->flash * 22;
         g_rot = false;
-        rect(0, 0, TOP_W, SCR_H, 0.5f, (old & 0x00FFFFFF) | ((u32)a << 24));
+        LAYER(0);
+        rect(-16, -16, TOP_W + 32, SCR_H + 32, 0.5f, (old & 0x00FFFFFF) | ((u32)a << 24));
     }
     g_rot = false;
+    g_shift = 0;
 }
 
 static void draw_banner(const char *title, const char *sub)
 {
+    g_shift = 0;
     rect(60, 80, 280, 80, 0.7f, rgba(0, 0, 0, 215));
     text(title, TOP_W / 2, 88, 0.8f, rgb(255, 255, 255), 0);
     text(sub, TOP_W / 2, 126, 0.5f, rgb(215, 215, 215), 0);
@@ -133,6 +149,8 @@ static void draw_banner(const char *title, const char *sub)
 
 static void draw_bottom(const Game *g, int screen)
 {
+    g_rot = false;
+    g_shift = 0;
     rect(0, 0, BOT_W, SCR_H, 0.0f, rgb(28, 28, 34));
     char buf[96];
 
@@ -176,6 +194,7 @@ static void draw_title(int sel, int tick)
 {
     bool f = (tick / 90) % 2;
     g_rot = false;
+    g_shift = 0;
     rect(0, 0, TOP_W, SCR_H, 0.0f, bg_color(f));
     rect(0, 150, TOP_W, 90, 0.05f, bg_color(!f));
     for (int i = 0; i < 5; i++) {
@@ -196,11 +215,13 @@ int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
     gfxInitDefault();
+    gfxSet3D(true);                 // stereoscopic 3D on the top screen
     C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
     C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
     C2D_Prepare();
-    C3D_RenderTarget *top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
-    C3D_RenderTarget *bot = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
+    C3D_RenderTarget *topL = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
+    C3D_RenderTarget *topR = C2D_CreateScreenTarget(GFX_TOP, GFX_RIGHT);
+    C3D_RenderTarget *bot  = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
     g_textBuf = C2D_TextBufNew(4096);
 
     static Game g;
@@ -260,24 +281,32 @@ int main(int argc, char **argv)
         }
 
         // ---- draw ----
+        float slider = osGet3DSliderState();   // 0.0 (off) .. 1.0 (max depth)
+
         C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
         C2D_TextBufClear(g_textBuf);
 
-        C2D_TargetClear(top, rgb(0, 0, 0));
-        C2D_SceneBegin(top);
-        if (screen == SCR_TITLE) {
-            draw_title(sel, tick);
-        } else {
-            draw_level(&g);
-            if (screen == SCR_END) {
-                char buf[96];
-                int t = totalFrames * 10 / 60;
-                snprintf(buf, sizeof buf, "%d shifts  -  %d.%d seconds", totalShifts, t / 10, t % 10);
-                draw_banner("ALL LEVELS CLEARED!", buf);
-            } else if (g.state == ST_WIN) {
-                draw_banner("LEVEL CLEAR", "A / tap: next level");
-            } else if (g.state == ST_DEAD) {
-                draw_banner("OUCH", "A / Y / tap: try again");
+        // Top screen: draw once per eye. With the slider at zero only the left
+        // image is needed.
+        for (int eye = 0; eye < 2; eye++) {
+            if (eye == 1 && slider <= 0.0f) break;
+            C3D_RenderTarget *t = eye ? topR : topL;
+            C2D_TargetClear(t, rgb(0, 0, 0));
+            C2D_SceneBegin(t);
+            if (screen == SCR_TITLE) {
+                draw_title(sel, tick);
+            } else {
+                draw_level(&g, eye ? -1.0f : 1.0f, slider);
+                if (screen == SCR_END) {
+                    char buf[96];
+                    int tt = totalFrames * 10 / 60;
+                    snprintf(buf, sizeof buf, "%d shifts  -  %d.%d seconds", totalShifts, tt / 10, tt % 10);
+                    draw_banner("ALL LEVELS CLEARED!", buf);
+                } else if (g.state == ST_WIN) {
+                    draw_banner("LEVEL CLEAR", "A / tap: next level");
+                } else if (g.state == ST_DEAD) {
+                    draw_banner("OUCH", "A / Y / tap: try again");
+                }
             }
         }
 
