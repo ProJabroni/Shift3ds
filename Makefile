@@ -12,6 +12,7 @@ include $(DEVKITARM)/3ds_rules
 
 # Recipe lines start with ">" instead of a Tab, so this file survives copy/paste.
 .RECIPEPREFIX := >
+DEPSDIR := .
 
 TARGET      := shift3ds
 SOURCES     := $(wildcard source/*.c)
