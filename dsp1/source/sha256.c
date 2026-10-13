@@ -1,3 +1,5 @@
+#include <string.h>
+#include <stdlib.h>
 /*********************************************************************
 * Filename:   sha256.c
 * Author:     Brad Conte (brad AT bradconte.com)
