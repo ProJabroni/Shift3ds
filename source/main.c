@@ -25,16 +25,6 @@ static void rect(float x, float y, float w, float h, float z, u32 c)
     C2D_DrawRectSolid(x + g_shift, y, z, w, h, c);
 }
 
-static void tri(float x0, float y0, float x1, float y1, float x2, float y2, float z, u32 c)
-{
-    C2D_DrawTriangle(x0 + g_shift, y0, c, x1 + g_shift, y1, c, x2 + g_shift, y2, c, z);
-}
-
-static void disc(float x, float y, float z, float r, u32 c)
-{
-    C2D_DrawCircleSolid(x + g_shift, y, z, r, c);
-}
-
 // Draws text; align: -1 left, 0 centered on x, 1 right-aligned to x.
 static void text(const char *s, float x, float y, float scale, u32 color, int align)
 {
@@ -56,75 +46,86 @@ static u32 mix(u32 a, u32 b, int pct)   // pct% of b
 }
 
 // eye: +1 = left eye, -1 = right eye. slider: 0..1 from the 3D slider.
-// Each layer is shifted by eye*slider*depth pixels: positive depth pops out of the
-// screen, negative sinks behind it.
+// Flat UI layers are shifted by eye*slider*d pixels: positive d pops out of the screen.
 #define LAYER(d) (g_shift = eye * slider * (d))
 
-// ---------------------------------------------------------------- level view --
+// ------------------------------------------------------------- 3D room view --
+// The room is a shallow box seen through the screen, like a diorama:
+//   z = 0  is the screen itself (the front faces of the ground blocks),
+//   z = -1 is the back wall.
+// Perspective pulls deeper points toward the middle of the screen, so you see the
+// sides of every block even with the 3D slider off. The slider then adds the matching
+// left/right eye shift. Nothing sticks out of the screen, so nothing gets cut off at
+// the screen edges, and the black front faces have no eye shift at all (no ghosting).
 
-static const u32 BLACK = 0xFF0C0C10;   // ABGR
-static const u32 WHITE = 0xFFF4F4F0;
+#define VX      200.0f     // vanishing point = screen centre
+#define VY      120.0f
+#define PERSP   0.04f      // the back wall is 4% smaller than the screen
+#define STEREO  6.0f       // per-eye shift of the back wall at full slider, in pixels
+#define Z_OBJ   (-0.35f)   // spikes, doors, text... stand a third of the way into the room
+#define Z_PFRONT (-0.2f)   // the player is a small cube between these depths
+#define Z_PBACK  (-0.6f)
+#define DEPTH   0.5f       // citro2d depth value for the room (painter's order)
 
-// What is drawn for cell `i` (visible rows only).
-static bool is_fill(const Game *g, int i)
+static float g_eye, g_slider;
+
+static inline float pscale(float z) { return 1.0f + PERSP * z; }
+static inline float pxp(float x, float z) { return VX + (x - VX) * pscale(z) + g_eye * g_slider * STEREO * z; }
+static inline float pyp(float y, float z) { return VY + (y - VY) * pscale(z); }
+
+static void prect(float x, float y, float w, float h, float z, u32 c)
 {
-    int c = g->tile[i];
-    return g->world ? c == 0x00 : c == 0x80;
+    float s = pscale(z);
+    C2D_DrawRectSolid(pxp(x, z), pyp(y, z), DEPTH, w * s, h * s, c);
 }
 
-static bool fill_at(const Game *g, int col, int row)
+// A face joining the edge (x0,y0)-(x1,y1) at depth zf to the same edge at depth zb,
+// shaded from colour cf (front) to cb (back).
+static void pface(float x0, float y0, float x1, float y1, float zf, float zb, u32 cf, u32 cb)
 {
-    if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return true;   // room edge acts as wall
-    return is_fill(g, row * COLS + col);
+    float ax = pxp(x0, zf), ay = pyp(y0, zf), bx = pxp(x1, zf), by = pyp(y1, zf);
+    float cx = pxp(x1, zb), cy = pyp(y1, zb), dx = pxp(x0, zb), dy = pyp(y0, zb);
+    C2D_DrawTriangle(ax, ay, cf, bx, by, cf, cx, cy, cb, DEPTH);
+    C2D_DrawTriangle(ax, ay, cf, cx, cy, cb, dx, dy, cb, DEPTH);
 }
 
-// Draws horizontal runs of cells selected by `sel`.
-typedef bool (*CellSel)(const Game *, int col, int row);
+// Shading of the four kinds of side face (light comes from the top left).
+typedef struct { u32 top, bottom, left, right; } FaceColors;
 
-static bool sel_fill(const Game *g, int c, int r)  { return fill_at(g, c, r) && c >= 0 && c < COLS && r >= 0 && r < ROWS && is_fill(g, r * COLS + c); }
-static bool sel_top(const Game *g, int c, int r)   { return sel_fill(g, c, r) && !fill_at(g, c, r - 1); }
-static bool sel_bot(const Game *g, int c, int r)   { return sel_fill(g, c, r) && !fill_at(g, c, r + 1); }
+// Each eye has its own vanishing point: the 3D slider moves them apart sideways.
+// A side face is visible to an eye only when it faces that eye's vanishing point.
+static inline float eye_vx(void) { return VX - g_eye * g_slider * STEREO / PERSP; }
 
-static void runs(const Game *g, CellSel sel, float inx, float iny, float w, float h, float z, u32 col, int mode)
+// Draws the visible sides of the box x0..x1, y0..y1 between depths zf and zb.
+static void pbox_sides(float x0, float y0, float x1, float y1, float zf, float zb, const FaceColors *f, u32 fog, int fogPct)
 {
-    // mode 0: whole cell inset by (inx,iny); 1: top strip h; 2: bottom strip h
-    for (int r = 0; r < ROWS; r++) {
-        int c = 0;
-        while (c < COLS) {
-            if (!sel(g, c, r)) { c++; continue; }
-            int c0 = c;
-            while (c < COLS && sel(g, c, r)) c++;
-            float x = c0 * CELL + inx, wd = (c - c0) * CELL + w;
-            float y = r * CELL + iny;
-            if (mode == 2) y = r * CELL + CELL - h;
-            rect(x, y, wd, mode ? h : CELL + h, z, col);
-        }
-    }
+    float vx = eye_vx();
+    if (y0 > VY) pface(x0, y0, x1, y0, zf, zb, f->top,    mix(f->top, fog, fogPct));
+    if (y1 < VY) pface(x0, y1, x1, y1, zf, zb, f->bottom, mix(f->bottom, fog, fogPct));
+    if (x0 > vx) pface(x0, y0, x0, y1, zf, zb, f->left,   mix(f->left, fog, fogPct));
+    if (x1 < vx) pface(x1, y0, x1, y1, zf, zb, f->right,  mix(f->right, fog, fogPct));
 }
 
-static void edge_bars(const Game *g, float z, u32 hi, u32 lo)
+static const u32 BLACK = 0xFF1C1614;   // ABGR: front faces of the ground
+static const u32 INK   = 0xFF1E1A18;   // objects drawn in the room
+static const u32 DECAL = 0xFFEAE6E4;   // white shapes printed on the ground
+
+// A cell is drawn as ground when its "paper" is black: in world 0 that is every
+// code with bit 7 set, in world 1 every code without it. Outside the room is ground.
+static bool solid_at(const Game *g, int col, int row)
 {
-    for (int r = 0; r < ROWS; r++)
-        for (int c = 0; c < COLS; c++) {
-            if (!sel_fill(g, c, r)) continue;
-            if (!fill_at(g, c - 1, r)) rect(c * CELL, r * CELL, 2, CELL, z, hi);
-            if (!fill_at(g, c + 1, r)) rect(c * CELL + CELL - 2, r * CELL, 2, CELL, z, lo);
-        }
+    if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return true;
+    int code = g->tile[row * COLS + col];
+    return ((code & 0x80) != 0) != (g->world != 0);
 }
 
-static void draw_glyph_cell(const Game *g, int col, int row, int code, float eye, float slider, int tick)
+// The 8 rows of ink bits of a tile, already turned for the current world.
+static void glyph_bits(const Game *g, int code, int tick, unsigned out[8])
 {
     bool w = g->world;
     bool inv = (code & 0x80) != 0;
     int gl = code & 0x7f;
     if (g->hasKey && gl == 0x64) gl = 0x61;               // the opened force field looks empty
-    u32 ink = w ? WHITE : BLACK, paper = w ? BLACK : WHITE;
-    if (inv) { u32 t = ink; ink = paper; paper = t; }
-    float x = col * CELL, y = row * CELL;
-    bool paperBlack = paper == BLACK;
-    LAYER(4);
-    if (paperBlack) rect(x, y, CELL, CELL, 0.12f, BLACK);
-    LAYER(8);
     for (int gy = 0; gy < 8; gy++) {
         unsigned bits;
         if (gl >= 0x73 && gl <= 0x76) {                      // animated button
@@ -135,73 +136,131 @@ static void draw_glyph_cell(const Game *g, int col, int row, int code, float eye
             if (w) { unsigned r = 0; for (int b = 0; b < 8; b++) if (bits & (1u << b)) r |= 1u << (7 - b); bits = r; }
         }
         if (inv) bits ^= 0xff;
+        // bits now mark "ink" pixels (the colour opposite to the paper)
+        out[gy] = bits & 0xff;
+    }
+}
+
+static void draw_glyph(const Game *g, int col, int row, int code, int tick, float z, u32 color)
+{
+    unsigned bits[8];
+    glyph_bits(g, code, tick, bits);
+    float x = col * CELL, y = row * CELL;
+    for (int gy = 0; gy < 8; gy++) {
         int gx = 0;
         while (gx < 8) {
-            if (!(bits & (0x80u >> gx))) { gx++; continue; }
+            if (!(bits[gy] & (0x80u >> gx))) { gx++; continue; }
             int g0 = gx;
-            while (gx < 8 && (bits & (0x80u >> gx))) gx++;
-            rect(x + g0 * PIX, y + gy * PIX, (gx - g0) * PIX, PIX, 0.2f, ink);
+            while (gx < 8 && (bits[gy] & (0x80u >> gx))) gx++;
+            prect(x + g0 * PIX, y + gy * PIX, (gx - g0) * PIX, PIX, z, color);
         }
     }
 }
 
 static void draw_level(const Game *g, float eye, float slider, int tick)
 {
+    g_eye = eye; g_slider = slider; g_shift = 0;
     bool w = g->world;
-    u32 air = w ? rgb(226, 232, 246) : rgb(244, 244, 238);
-    u32 dim1 = mix(air, rgb(120, 130, 160), 7), dim2 = mix(air, rgb(120, 130, 160), 12);
+    u32 air  = w ? rgb(226, 232, 246) : rgb(240, 240, 234);
+    u32 grid = mix(air, rgb(100, 110, 150), 9);
 
-    // far background: dim shapes sink behind the screen
-    LAYER(-9);
-    rect(-60, -10, TOP_W + 120, SCR_H + 20, 0.0f, air);
-    for (int i = 0; i < 6; i++)
-        disc(30 + i * 85 - (tick / 6) % 85, 60 + (i * 53) % 130, 0.01f, 40 + (i * 17) % 25, dim1);
-    LAYER(-5);
-    for (int i = 0; i < 9; i++)
-        rect(i * 56 - 20 - (tick / 3) % 56, 24 + (i * 37) % 160, 30, 30, 0.02f, dim2);
-    LAYER(-2);
-    for (int i = 0; i < 14; i++)
-        rect(i * 32 + 6, (i % 2) ? 12 : 220, 14, 8, 0.03f, dim2);
+    // ground sides: dark near the screen, fading toward the wall colour at the back
+    static const FaceColors ground = {
+        0xFF8C7C78,   // top    (lit)           ABGR
+        0xFF2E2826,   // bottom (in shadow)
+        0xFF625654,   // left
+        0xFF463C3A,   // right
+    };
 
-    // extruded black ground: shadow, side slices, raised top face, bevel
-    u32 shadow = mix(air, rgb(30, 30, 50), 30);
-    LAYER(0);  runs(g, sel_fill, 3, 3, 0, 0, 0.05f, shadow, 0);
-    LAYER(1.5f); runs(g, sel_fill, 0, 0, 0, 0, 0.06f, rgb(70, 70, 82), 0);
-    LAYER(3);    runs(g, sel_fill, 0, 0, 0, 0, 0.07f, rgb(46, 46, 56), 0);
-    LAYER(4.5f); runs(g, sel_fill, 0, 0, 0, 0, 0.08f, rgb(28, 28, 36), 0);
-    LAYER(6);    runs(g, sel_fill, 0, 0, 0, 0, 0.12f, BLACK, 0);
-    runs(g, sel_top, 0, 0, 0, 2, 0.13f, rgb(86, 86, 100), 1);
-    runs(g, sel_bot, 0, 0, 0, 2, 0.13f, rgb(36, 36, 44), 2);
-    edge_bars(g, 0.13f, rgb(86, 86, 100), rgb(30, 30, 38));
+    // 1. back wall with a faint tile grid (gives the eyes something to lock onto)
+    C2D_DrawRectSolid(0, 0, DEPTH, TOP_W, SCR_H, air);
+    for (int c = 0; c <= COLS; c++) prect(c * CELL - 0.5f, 0, 1, SCR_H, -1, grid);
+    for (int r = 0; r <= ROWS; r++) prect(0, r * CELL - 0.5f, TOP_W, 1, -1, grid);
 
-    // everything that is not plain air or ground: drawn from the original glyphs
+    // 2. the inside walls of the room box (the outside counts as ground)
+    pface(0, 0, TOP_W, 0, 0, -1, ground.bottom, mix(ground.bottom, air, 65));
+    pface(0, SCR_H, TOP_W, SCR_H, 0, -1, ground.top, mix(ground.top, air, 65));
+    pface(0, 0, 0, SCR_H, 0, -1, ground.right, mix(ground.right, air, 65));
+    pface(TOP_W, 0, TOP_W, SCR_H, 0, -1, ground.left, mix(ground.left, air, 65));
+
+    // 3. sides of the ground blocks, merged into long runs
+    for (int r = 0; r < ROWS; r++) {
+        float yt = r * CELL, yb = yt + CELL;
+        for (int pass = 0; pass < 2; pass++) {          // 0: top faces, 1: bottom faces
+            float y = pass ? yb : yt;
+            if (pass ? !(y < VY) : !(y > VY)) continue;
+            int c = 0;
+            while (c < COLS) {
+                bool on = solid_at(g, c, r) && !solid_at(g, c, pass ? r + 1 : r - 1);
+                if (!on) { c++; continue; }
+                int c0 = c;
+                while (c < COLS && solid_at(g, c, r) && !solid_at(g, c, pass ? r + 1 : r - 1)) c++;
+                u32 f = pass ? ground.bottom : ground.top;
+                pface(c0 * CELL, y, c * CELL, y, 0, -1, f, mix(f, air, 65));
+            }
+        }
+    }
+    float vx = eye_vx();
+    for (int c = 0; c < COLS; c++) {
+        float xl = c * CELL, xr = xl + CELL;
+        for (int pass = 0; pass < 2; pass++) {          // 0: left faces, 1: right faces
+            float x = pass ? xr : xl;
+            if (pass ? !(x < vx) : !(x > vx)) continue;
+            int r = 0;
+            while (r < ROWS) {
+                bool on = solid_at(g, c, r) && !solid_at(g, pass ? c + 1 : c - 1, r);
+                if (!on) { r++; continue; }
+                int r0 = r;
+                while (r < ROWS && solid_at(g, c, r) && !solid_at(g, pass ? c + 1 : c - 1, r)) r++;
+                u32 f = pass ? ground.right : ground.left;
+                pface(x, r0 * CELL, x, r * CELL, 0, -1, f, mix(f, air, 65));
+            }
+        }
+    }
+
+    // 4. things standing in the room: spikes, doors, keys, buttons, text
     for (int r = 0; r < ROWS; r++)
         for (int c = 0; c < COLS; c++) {
             int code = g->tile[r * COLS + c];
-            if (code == 0x00 || code == 0x80) continue;      // plain air / ground
-            draw_glyph_cell(g, c, r, code, eye, slider, tick);
+            if (code == 0x00 || code == 0x80 || solid_at(g, c, r)) continue;
+            draw_glyph(g, c, r, code, tick, Z_OBJ, INK);
         }
 
-    // the player: orange block, pops out the most, with a shadow on the ground plane
+    // 5. the player: an orange cube inside the room
     float px = g->ax * PIX, py = (g->y - 0x20) * PIX, ps = 16 * PIX;
-    u32 body = rgb(255, 140, 20);
-    if (g->state == ST_DEAD) body = rgb(200, 40, 40);
-    LAYER(3);
-    rect(px + 3, py + 3, ps, ps, 0.25f, shadow);
-    LAYER(11);
-    rect(px, py, ps, ps, 0.3f, body);
-    rect(px, py, ps, 2, 0.31f, rgb(255, 196, 120));
-    rect(px, py + ps - 3, ps, 3, 0.31f, rgb(200, 90, 10));
+    bool dead = g->state == ST_DEAD;
+    FaceColors cube = dead
+        ? (FaceColors){ rgb(240, 110, 110), rgb(120, 20, 20), rgb(200, 50, 50), rgb(160, 30, 30) }
+        : (FaceColors){ rgb(255, 200, 120), rgb(170, 70, 10), rgb(235, 125, 25), rgb(200, 95, 15) };
+    u32 body = dead ? rgb(210, 45, 45) : rgb(255, 145, 25);
+    pbox_sides(px, py, px + ps, py + ps, Z_PFRONT, Z_PBACK, &cube, air, 20);
+    prect(px, py, ps, ps, Z_PFRONT, body);
+    prect(px, py, ps, 2, Z_PFRONT, dead ? rgb(240, 110, 110) : rgb(255, 200, 130));
     bool right = g->facing == 1 || g->facing == 3;
     float ex = right ? px + ps - 11 : px + 4;
-    rect(ex, py + 6, 3, 5, 0.32f, rgb(20, 20, 24));
-    rect(ex + 5, py + 6, 3, 5, 0.32f, rgb(20, 20, 24));
+    prect(ex, py + 6, 3, 5, Z_PFRONT, rgb(20, 20, 24));
+    prect(ex + 5, py + 6, 3, 5, Z_PFRONT, rgb(20, 20, 24));
     if (g->events & EV_DENY) {
-        LAYER(13);
-        rect(px - 3, py - 3, ps + 6, 2, 0.4f, rgba(230, 40, 40, 220));
-        rect(px - 3, py + ps + 1, ps + 6, 2, 0.4f, rgba(230, 40, 40, 220));
+        prect(px - 3, py - 3, ps + 6, 2, Z_PFRONT, rgb(230, 40, 40));
+        prect(px - 3, py + ps + 1, ps + 6, 2, Z_PFRONT, rgb(230, 40, 40));
     }
-    g_shift = 0;
+
+    // 6. front faces of the ground, on the screen plane, with their printed shapes
+    for (int r = 0; r < ROWS; r++) {
+        int c = 0;
+        while (c < COLS) {
+            if (!solid_at(g, c, r)) { c++; continue; }
+            int c0 = c;
+            while (c < COLS && solid_at(g, c, r)) c++;
+            C2D_DrawRectSolid(c0 * CELL, r * CELL, DEPTH, (c - c0) * CELL, CELL, BLACK);
+        }
+    }
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++) {
+            int code = g->tile[r * COLS + c];
+            if (code == 0x00 || code == 0x80 || !solid_at(g, c, r)) continue;
+            draw_glyph(g, c, r, code, tick, 0, DECAL);
+        }
 }
 
 static void draw_banner(const char *title, const char *sub)
@@ -252,15 +311,14 @@ static void draw_bottom(const Game *g, int screen, int selLevel)
 static void draw_title(const Game *preview, int sel, int tick, float eye, float slider)
 {
     draw_level(preview, eye, slider, tick);
-    LAYER(14);
-    rect(40, 20, 320, 66, 0.6f, rgba(0, 0, 0, 170));
-    LAYER(15);
+    // the panels float just in front of the screen; the room stays behind it
+    LAYER(1);
+    rect(40, 20, 320, 66, 0.6f, rgba(0, 0, 0, 185));
+    rect(40, 176, 320, 52, 0.6f, rgba(0, 0, 0, 185));
+    LAYER(2);
     text("SHIFT", TOP_W / 2, 20, 1.5f, rgb(255, 255, 255), 0);
-    LAYER(14);
-    rect(40, 176, 320, 52, 0.6f, rgba(0, 0, 0, 170));
     char buf[64];
     snprintf(buf, sizeof buf, "<  Level %d / %d  >", sel + 1, NUM_LEVELS - 1);
-    LAYER(15);
     text(buf, TOP_W / 2, 182, 0.6f, rgb(255, 255, 255), 0);
     text("Press A to play      START to quit", TOP_W / 2, 206, 0.45f, rgb(220, 220, 225), 0);
     g_shift = 0;

@@ -9,9 +9,13 @@ a chiptune soundtrack and all 37 original room layouts.
   behaviour frame for frame (checked against an emulation of the original program),
   and `source/atari_data.c` contains its level layouts and tile graphics.
   This is a fan project for personal use - please don't redistribute the built game.
-* Graphics are redrawn for the 3DS top screen (400x240 = 40x24 tiles of 10 px) with layered
-  depth for the 3D slider. Music and sound effects are synthesised on the console at startup
-  (needs the DSP firmware dump, `sdmc:/3ds/dspfirm.cdc`, otherwise the game is silent).
+* Graphics are redrawn for the 3DS top screen (400x240 = 40x24 tiles of 10 px). Each room is
+  drawn as a shallow box behind the screen, so the blocks have real sides with the 3D slider
+  on or off, and nothing pops out far enough to ghost or get cut off at the screen edges.
+  `tools/preview/` renders both eye views on a PC for checking the look.
+* Music and sound effects are synthesised on the console at startup (needs the DSP firmware
+  dump, `sdmc:/3ds/dspfirm.cdc`, otherwise the game is silent). Run DSP1 (included in the
+  release, by zoogie, MIT licence) once to create it.
 
 ## How it plays
 
