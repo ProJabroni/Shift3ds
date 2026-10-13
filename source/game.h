@@ -1,53 +1,46 @@
-// Shift 3DS - platform independent game logic.
-// Integer-only physics so the host-side solver (test/solve.c) and the 3DS
-// build behave identically.
-//
-// The mechanic: pressing SHIFT rotates the whole room 180 degrees (and inverts
-// the colours). In level coordinates that simply reverses gravity, so you fall
-// toward what used to be the ceiling. Controls stay relative to the screen.
+// Shift 3DS - game logic.  A port of the Atari 8-bit "Shift" rules (screen of
+// 40x25 tiles of 8x8 pixels, 16x16 player, walking 2 px/frame, 180-degree room
+// rotation) so the original 37 level layouts play exactly as designed.
+// Platform independent and integer-only; shared with the host-side tools.
 #pragma once
 #include <stdbool.h>
+#include "atari_data.h"
 
-#define TILE        16
-#define GW          25            // 25 * 16 = 400 px (top screen width)
-#define GH          15            // 15 * 16 = 240 px (top screen height)
-#define NUM_LEVELS  8
-#define MAX_KEYS    3
+#define COLS        40
+#define ROWS        24            // visible rows (a 25th hidden row exists)
+#define CELLS       1000          // 40 * 25
+#define NUM_LEVELS  ATARI_NUM_LEVELS
 
-#define PW          12            // player hitbox
-#define PH          12
-#define MOVE_SPEED  3
-#define JUMP_V      9             // jump impulse (magnitude)
-#define GRAVITY     1
-#define MAX_FALL    8
-
-// Tile characters in level data:
-//  '#' solid     '^' spikes (deadly)     'k' key     'L' lock (solid until all
-//  keys are collected)     'E' exit door     'S' player start
 enum { ST_PLAY = 0, ST_DEAD, ST_WIN };
+enum { EV_JUMP = 1, EV_SHIFT = 2, EV_DENY = 4, EV_KEY = 8, EV_DIE = 16,
+       EV_WIN = 32, EV_LAND = 64, EV_BUTTON = 128 };
+enum { IN_LEFT = 1, IN_RIGHT = 2, IN_JUMP = 4, IN_SHIFT = 8 };
+
+typedef struct { int b0, b1, cell; unsigned char back[4]; } Bar;
 
 typedef struct {
     int  level;
-    char tiles[GH][GW + 1];
-    int  px, py;          // top-left of the player in level coordinates, pixels
-    int  vy;              // velocity along level Y (positive = toward bottom row)
-    bool flip;            // false: gravity toward bottom row; true: toward top row
-    bool onGround;
-    int  state;
-    int  shifts;
-    int  frames;
-    int  flash;           // >0: a shift just happened (visual feedback)
-    int  numKeys, keysLeft;
-    unsigned keyMask;     // bit i set = key i collected
-    int  keyX[MAX_KEYS], keyY[MAX_KEYS];
+    unsigned char tile[CELLS];   // the screen as currently shown (rotated in world 1)
+    unsigned char types[256];    // tile behaviour table (the key opens the gate)
+    int  ax, y;                  // player left x (0..) and Atari scanline (row*8 + 32)
+    int  jump, jcnt, fall, probe;
+    int  cls;                    // 0x10 or 0x00: tile class that is solid right now
+    int  cool11, cool12;         // shift cooldown, button cooldown
+    int  hasKey, exitFlag;
+    int  world;                  // 0 normal, 1 rotated 180 degrees
+    int  facing;                 // 0/2 left, 1/3 right (sprite)
+    int  state, timer;
+    int  shifts, frames;
+    int  events;
+    int  numBars;
+    Bar  bar[4];
+    int  gotoLevel;              // >=0: secret tile asked to jump to that level
 } Game;
 
-extern const char *const LEVEL_NAMES[NUM_LEVELS];
-extern const char *const LEVEL_HINTS[NUM_LEVELS];
-extern const char *const LEVELS[NUM_LEVELS][GH];
-
 void game_load(Game *g, int level);
-// dir: -1/0/1 relative to the SCREEN, jump: jump if grounded, shift: flip room
-void game_step(Game *g, int dir, bool jump, bool shift);
-void game_set_keymask(Game *g, unsigned mask);   // restore collected keys (solver)
-void game_sync(Game *g);   // recompute onGround after editing px/py/flip
+void game_step(Game *g, int input);          // IN_* bits, call once per 1/60 s
+int  game_next_level(int level);              // -1 after the last level
+
+// Compact packed state for search tools (not used by the game itself).
+unsigned long long game_pack(const Game *g);
+void game_unpack(Game *g, int level, unsigned long long packed);

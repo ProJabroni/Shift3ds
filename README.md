@@ -1,55 +1,52 @@
 # Shift 3DS
 
-An original Nintendo 3DS puzzle-platformer inspired by the browser game *Shift*:
-flip the world between black and white, and the blocks that are solid flip with it.
-Eight levels, touch-screen shift button, custom controls.
+A Nintendo 3DS port of the black-and-white puzzle platformer *Shift*, with stereoscopic 3D,
+a chiptune soundtrack and all 37 original room layouts.
+
+* Rules, physics and levels follow the Atari 8-bit version of Shift by **Haplo**
+  (https://h4plo.itch.io/shift), which is based on the original game by **Antony Lavelle** /
+  Armor Games. The game logic in `source/game.c` was written to reproduce that version's
+  behaviour frame for frame (checked against an emulation of the original program),
+  and `source/atari_data.c` contains its level layouts and tile graphics.
+  This is a fan project for personal use - please don't redistribute the built game.
+* Graphics are redrawn for the 3DS top screen (400x240 = 40x24 tiles of 10 px) with layered
+  depth for the 3D slider. Music and sound effects are synthesised on the console at startup
+  (needs the DSP firmware dump, `sdmc:/3ds/dspfirm.cdc`, otherwise the game is silent).
+
+## How it plays
+
+The room is black and white. You walk on the black; white is air. **Shift** turns the whole
+room upside-down and swaps the colours, so you end up standing on what used to be sky.
+You can only shift while standing on the ground (the original rule), and not for a moment
+after landing. Reach the door. Spikes kill, the pickaxe opens the dotted force fields, and
+buttons swing the hinged bars. Levels 1-2 are tutorials (no shifting yet).
 
 ## Controls
 
 | Action  | Input                                        |
 |---------|----------------------------------------------|
 | Move    | Circle Pad or D-Pad                          |
-| Jump    | A (hold to keep hopping) or Up               |
+| Jump    | A or Up (hold to keep hopping)               |
 | Shift   | B, X, L, R, ZL/ZR (New 3DS) or tap the bottom screen |
 | Restart | Y (or the RESTART button)                    |
 | Menu    | Start                                        |
 
-Rules: `W` blocks are solid in the white world, `K` blocks only in the black world,
-grey blocks always, red spikes always kill, green door is the exit.
-A shift is refused (player flashes red) if it would put you inside a block.
-You can shift in mid-air, which most levels need.
-
 ## Building
 
 Requirements: [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `3ds-dev`
-group (`dkp-pacman -S 3ds-dev`), `DEVKITARM` set, and for the .cia also
-`makerom` (Project_CTR) and `bannertool` somewhere in your PATH.
+group, `DEVKITARM` set, and for the .cia also `makerom` and `bannertool` in PATH.
+The GitHub Actions workflow in `.github/workflows/build.yml` does all of this in the cloud and
+uploads `shift3ds.cia` and `shift3ds.3dsx` as a build artifact.
 
 ```
-python3 tools/make_assets.py   # only if assets/ is missing (icon, banner, audio)
-make        # -> shift3ds.3dsx  (Homebrew Launcher: copy to sdmc:/3ds/)
-make cia    # -> shift3ds.cia   (install with FBI on a custom-firmware 3DS)
+python3 tools/make_assets.py   # icon, banner, audio placeholder
+make        # -> shift3ds.3dsx  (Homebrew Launcher)
+make cia    # -> shift3ds.cia    (install with FBI on a custom-firmware 3DS)
 ```
 
-A .cia only runs on a 3DS-family console with custom firmware. A plain DS / DSi / DS Lite
-needs a `.nds` build instead, which is a different codebase (libnds).
-
-## Editing levels
-
-Levels live in `tools/levels.py` as small drawing scripts. After editing:
+## Host-side tools
 
 ```
-python3 tools/levels.py        # regenerates source/levels.c
-gcc -O2 -o solve test/solve.c source/game.c source/levels.c && ./solve
+gcc -O2 -o solve test/solve.c source/game.c source/atari_data.c && ./solve   # every level beatable?
+python3 tools/atari/export.py shift.xex source/atari_data.c                   # regenerate level data
 ```
-
-`solve` runs a breadth-first search over every possible input sequence using the same
-integer physics as the console build, and tells you if each level is beatable.
-
-## Status
-
-* Game logic and all 8 levels: compiled and solver-verified on a PC.
-* `main.c` (rendering/input), `Makefile` and `shift3ds.rsf`: written against the
-  libctru/citro2d APIs but **not compiled with devkitARM or run on hardware** yet.
-  If `make cia` complains, the `.rsf` (makerom config) is the most likely culprit;
-  any known-good homebrew `.rsf` can be swapped in (keep the Title/UniqueId lines).

@@ -12,6 +12,8 @@ include $(DEVKITARM)/3ds_rules
 
 # Recipe lines start with ">" instead of a Tab, so this file survives copy/paste.
 .RECIPEPREFIX := >
+
+# devkitARM's compile rule writes dependency files here; it must not be empty.
 DEPSDIR := .
 
 TARGET      := shift3ds
@@ -19,7 +21,7 @@ SOURCES     := $(wildcard source/*.c)
 OFILES      := $(SOURCES:.c=.o)
 
 APP_TITLE   := Shift 3DS
-APP_LONG    := Flip the world between black and white
+APP_LONG    := Shift the world upside-down
 APP_AUTHOR  := You
 
 MAKEROM     ?= makerom
@@ -38,7 +40,7 @@ all: $(TARGET).3dsx
 
 cia: $(TARGET).cia
 
-%.o: %.c source/game.h
+%.o: %.c source/game.h source/atari_data.h source/music.h
 > $(CC) $(CFLAGS) -c $< -o $@
 
 $(TARGET).elf: $(OFILES)
