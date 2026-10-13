@@ -91,4 +91,23 @@ void game_step(Game *g, int dir, bool jump, bool shift)
     // Horizontal movement, one pixel at a time.
     int vx = dir * MOVE_SPEED;
     int sx = vx < 0 ? -1 : 1;
-    for (int i = 0; i < (vx 
+    for (int i = 0; i < (vx < 0 ? -vx : vx); i++) {
+        if (hits(g, g->px + sx, g->py)) break;
+        g->px += sx;
+    }
+
+    // Vertical movement.
+    if (jump && g->onGround) g->vy = JUMP_V;
+    g->vy += GRAVITY;
+    if (g->vy > MAX_FALL) g->vy = MAX_FALL;
+    int sy = g->vy < 0 ? -1 : 1;
+    for (int i = 0; i < (g->vy < 0 ? -g->vy : g->vy); i++) {
+        if (hits(g, g->px, g->py + sy)) { g->vy = 0; break; }
+        g->py += sy;
+    }
+    g->onGround = hits(g, g->px, g->py + 1);
+
+    if (g->py >= GH * TILE)      g->state = ST_DEAD;      // fell out of the world
+    else if (touches(g, '^', 3)) g->state = ST_DEAD;
+    else if (touches(g, 'E', 4)) g->state = ST_WIN;
+}
