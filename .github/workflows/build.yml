@@ -42,8 +42,14 @@ jobs:
       - name: Build game
         run: make all cia
 
+      - name: Build DSP1 (sound-file dumper)
+        continue-on-error: true
+        run: |
+          make -C dsp1 all cia
+          cp dsp1/dsp1.cia dsp1/dsp1.3dsx .
+
       - name: Show built files
-        run: ls -l shift3ds.cia shift3ds.3dsx
+        run: ls -l shift3ds.cia shift3ds.3dsx dsp1.cia dsp1.3dsx || true
 
       - uses: actions/upload-artifact@v4
         with:
@@ -52,6 +58,8 @@ jobs:
           path: |
             shift3ds.cia
             shift3ds.3dsx
+            dsp1.cia
+            dsp1.3dsx
 
       - name: Publish as a normal download
         if: github.ref == 'refs/heads/main'
@@ -62,6 +70,12 @@ jobs:
           body: |
             Newest build. Tap shift3ds.cia below, then install it with FBI.
             shift3ds.3dsx is the same game for the Homebrew Launcher.
+
+            Want the music? Install dsp1.cia the same way and run it once.
+            It saves the sound file (dspfirm.cdc) the game needs. DSP1 is
+            by zoogie (MIT licence).
           files: |
             shift3ds.cia
             shift3ds.3dsx
+            dsp1.cia
+            dsp1.3dsx
