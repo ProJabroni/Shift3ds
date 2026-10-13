@@ -12,13 +12,25 @@
 enum { SCR_TITLE, SCR_PLAY, SCR_END };
 
 static C2D_TextBuf g_textBuf;
+static bool g_rot;   // when true, rect()/tri() draw the room rotated 180 degrees
 
 static inline u32 rgb(int r, int g, int b) { return C2D_Color32(r, g, b, 255); }
 static inline u32 rgba(int r, int g, int b, int a) { return C2D_Color32(r, g, b, a); }
 
 static void rect(float x, float y, float w, float h, float z, u32 c)
 {
+    if (g_rot) { x = TOP_W - (x + w); y = SCR_H - (y + h); }
     C2D_DrawRectSolid(x, y, z, w, h, c);
+}
+
+static void tri(float x0, float y0, float x1, float y1, float x2, float y2, float z, u32 c)
+{
+    if (g_rot) {
+        x0 = TOP_W - x0; y0 = SCR_H - y0;
+        x1 = TOP_W - x1; y1 = SCR_H - y1;
+        x2 = TOP_W - x2; y2 = SCR_H - y2;
+    }
+    C2D_DrawTriangle(x0, y0, c, x1, y1, c, x2, y2, c, z);
 }
 
 // Draws text; align: -1 left, 0 centered on x, 1 right-aligned to x.
@@ -36,14 +48,23 @@ static void text(const char *s, float x, float y, float scale, u32 color, int al
 
 // ---------------------------------------------------------------- drawing --
 
-static u32 bg_color(bool black)   { return black ? rgb(14, 14, 18) : rgb(244, 244, 238); }
-static u32 fg_color(bool black)   { return black ? rgb(240, 240, 234) : rgb(18, 18, 24); }
-static u32 ghost_color(bool black){ return black ? rgb(58, 58, 68) : rgb(205, 205, 198); }
+// Normal room: white air, black ground. Flipped room: colours invert too.
+static u32 bg_color(bool flip) { return flip ? rgb(10, 10, 12) : rgb(246, 246, 242); }
+static u32 fg_color(bool flip) { return flip ? rgb(246, 246, 242) : rgb(10, 10, 12); }
+
+static bool is_solid_char(const Game *g, int tx, int ty)
+{
+    if (tx < 0 || tx >= GW || ty < 0 || ty >= GH) return true;
+    char c = g->tiles[ty][tx];
+    return c == '#' || (c == 'L' && g->keysLeft > 0);
+}
 
 static void draw_level(const Game *g)
 {
-    bool black = g->world;
-    rect(0, 0, TOP_W, SCR_H, 0.0f, bg_color(black));
+    bool f = g->flip;
+    u32 bg = bg_color(f), fg = fg_color(f);
+    g_rot = f;
+    rect(0, 0, TOP_W, SCR_H, 0.0f, bg);
 
     for (int ty = 0; ty < GH; ty++) {
         for (int tx = 0; tx < GW; tx++) {
@@ -51,53 +72,63 @@ static void draw_level(const Game *g)
             float x = tx * TILE, y = ty * TILE;
             switch (c) {
             case '#':
-                rect(x, y, TILE, TILE, 0.1f, rgb(116, 116, 126));
-                rect(x + 1, y + 1, TILE - 2, TILE - 2, 0.11f, rgb(140, 140, 150));
+                rect(x, y, TILE, TILE, 0.1f, fg);
                 break;
-            case 'W':
-            case 'K':
-                if (game_tile_active(g, c)) {
-                    rect(x, y, TILE, TILE, 0.1f, fg_color(black));
-                } else {            // dormant: hollow outline of the other world
-                    rect(x, y, TILE, TILE, 0.1f, ghost_color(black));
-                    rect(x + 2, y + 2, TILE - 4, TILE - 4, 0.11f, bg_color(black));
+            case 'L':
+                if (g->keysLeft > 0) {          // locked: striped block
+                    rect(x, y, TILE, TILE, 0.1f, fg);
+                    rect(x + 3, y + 3, TILE - 6, TILE - 6, 0.11f, bg);
+                    rect(x + 6, y + 6, TILE - 12, TILE - 12, 0.12f, fg);
                 }
                 break;
-            case '^':
-                C2D_DrawTriangle(x, y + TILE, rgb(210, 40, 40),
-                                 x + TILE, y + TILE, rgb(210, 40, 40),
-                                 x + TILE / 2, y + 3, rgb(255, 90, 70), 0.2f);
+            case '^': {
+                // Point away from the neighbouring solid tile.
+                bool onFloor = is_solid_char(g, tx, ty + 1);
+                bool onCeil  = is_solid_char(g, tx, ty - 1);
+                float x0 = x, x1 = x + TILE, xm = x + TILE / 2;
+                if (onFloor || !onCeil)
+                    tri(x0, y + TILE, x1, y + TILE, xm, y + 2, 0.2f, fg);
+                else
+                    tri(x0, y, x1, y, xm, y + TILE - 2, 0.2f, fg);
                 break;
-            case 'E':
-                rect(x + 1, y, TILE - 2, TILE, 0.1f, rgb(40, 170, 90));
-                rect(x + 4, y + 3, TILE - 8, TILE - 3, 0.11f, rgb(150, 245, 190));
+            }
+            case 'k':                            // key: ring with a bar
+                rect(x + 3, y + 3, 10, 10, 0.2f, fg);
+                rect(x + 5, y + 5, 6, 6, 0.21f, bg);
+                rect(x + 7, y + 7, 2, 2, 0.22f, fg);
+                break;
+            case 'E':                            // door
+                rect(x + 1, y, TILE - 2, TILE, 0.1f, fg);
+                rect(x + 3, y + 2, TILE - 6, TILE - 2, 0.11f, bg);
+                rect(x + 9, y + 8, 2, 2, 0.12f, fg);
                 break;
             default: break;
             }
         }
     }
 
-    // Player
+    // Player: orange block, eyes toward the floor side.
     u32 body = rgb(255, 140, 20);
-    if (g->deny > 0 && (g->deny / 2) % 2 == 0) body = rgb(220, 30, 30);
-    if (g->state == ST_DEAD) body = rgb(120, 30, 30);
+    if (g->state == ST_DEAD) body = rgb(200, 40, 40);
     rect(g->px, g->py, PW, PH, 0.3f, body);
     rect(g->px + 3, g->py + 3, 2, 3, 0.31f, rgb(20, 20, 24));
     rect(g->px + 7, g->py + 3, 2, 3, 0.31f, rgb(20, 20, 24));
 
-    // Shift flash: fades from the previous world's colour.
+    // Shift flash: fades in from the previous colours.
     if (g->flash > 0) {
-        u32 old = bg_color(!black);
-        int a = g->flash * 28;
+        u32 old = bg_color(!f);
+        int a = g->flash * 22;
+        g_rot = false;
         rect(0, 0, TOP_W, SCR_H, 0.5f, (old & 0x00FFFFFF) | ((u32)a << 24));
     }
+    g_rot = false;
 }
 
 static void draw_banner(const char *title, const char *sub)
 {
-    rect(60, 80, 280, 80, 0.7f, rgba(0, 0, 0, 200));
+    rect(60, 80, 280, 80, 0.7f, rgba(0, 0, 0, 215));
     text(title, TOP_W / 2, 88, 0.8f, rgb(255, 255, 255), 0);
-    text(sub, TOP_W / 2, 126, 0.5f, rgb(210, 210, 210), 0);
+    text(sub, TOP_W / 2, 126, 0.5f, rgb(215, 215, 215), 0);
 }
 
 static void draw_bottom(const Game *g, int screen)
@@ -109,13 +140,18 @@ static void draw_bottom(const Game *g, int screen)
         snprintf(buf, sizeof buf, "Level %d/%d  -  %s", g->level + 1, NUM_LEVELS, LEVEL_NAMES[g->level]);
         text(buf, BOT_W / 2, 8, 0.55f, rgb(255, 255, 255), 0);
         int t = g->frames * 10 / 60;
-        snprintf(buf, sizeof buf, "Shifts: %d     Time: %d.%ds", g->shifts, t / 10, t % 10);
-        text(buf, BOT_W / 2, 32, 0.5f, rgb(190, 190, 200), 0);
+        if (g->numKeys > 0)
+            snprintf(buf, sizeof buf, "Shifts %d   Time %d.%ds   Keys %d/%d",
+                     g->shifts, t / 10, t % 10, g->numKeys - g->keysLeft, g->numKeys);
+        else
+            snprintf(buf, sizeof buf, "Shifts %d   Time %d.%ds", g->shifts, t / 10, t % 10);
+        text(buf, BOT_W / 2, 32, 0.45f, rgb(190, 190, 200), 0);
+        text(LEVEL_HINTS[g->level], BOT_W / 2, 52, 0.42f, rgb(255, 170, 60), 0);
 
         // Big touch button
-        rect(20, 62, 280, 96, 0.1f, g->world ? rgb(235, 235, 230) : rgb(70, 70, 80));
-        text("TAP TO SHIFT", BOT_W / 2, 90, 0.8f, g->world ? rgb(20, 20, 24) : rgb(240, 240, 240), 0);
-        text("flip black <-> white", BOT_W / 2, 124, 0.45f, g->world ? rgb(70, 70, 80) : rgb(180, 180, 190), 0);
+        rect(20, 80, 280, 80, 0.1f, g->flip ? rgb(235, 235, 230) : rgb(70, 70, 80));
+        text("TAP TO SHIFT", BOT_W / 2, 98, 0.8f, g->flip ? rgb(20, 20, 24) : rgb(240, 240, 240), 0);
+        text("rotate the room", BOT_W / 2, 132, 0.42f, g->flip ? rgb(70, 70, 80) : rgb(180, 180, 190), 0);
 
         rect(20, 172, 135, 52, 0.1f, rgb(60, 60, 72));
         text("RESTART", 87, 186, 0.55f, rgb(240, 240, 240), 0);
@@ -131,27 +167,27 @@ static void draw_bottom(const Game *g, int screen)
             "Menu      Start",
         };
         for (int i = 0; i < 5; i++) text(lines[i], 22, 52 + i * 26, 0.5f, rgb(205, 205, 215), -1);
-        text("Shift swaps which blocks are solid.", BOT_W / 2, 196, 0.42f, rgb(255, 170, 60), 0);
-        text("A shift is refused inside a block.", BOT_W / 2, 214, 0.42f, rgb(255, 170, 60), 0);
+        text("SHIFT rotates the room: gravity flips.", BOT_W / 2, 196, 0.42f, rgb(255, 170, 60), 0);
+        text("Left/Right always follow the screen.", BOT_W / 2, 214, 0.42f, rgb(255, 170, 60), 0);
     }
 }
 
 static void draw_title(int sel, int tick)
 {
-    bool black = (tick / 90) % 2;
-    rect(0, 0, TOP_W, SCR_H, 0.0f, bg_color(black));
-    rect(0, 150, TOP_W, 90, 0.05f, bg_color(!black));
-    // Logo tiles
+    bool f = (tick / 90) % 2;
+    g_rot = false;
+    rect(0, 0, TOP_W, SCR_H, 0.0f, bg_color(f));
+    rect(0, 150, TOP_W, 90, 0.05f, bg_color(!f));
     for (int i = 0; i < 5; i++) {
         bool dark = (i + tick / 30) % 2;
-        rect(80 + i * 48, 44, 44, 44, 0.1f, dark ? rgb(18, 18, 24) : rgb(240, 240, 234));
-        rect(80 + i * 48, 44, 44, 44, 0.09f, rgb(255, 140, 20));
+        rect(80 + i * 48, 44, 44, 44, 0.1f, dark ? rgb(10, 10, 12) : rgb(246, 246, 242));
+        rect(86 + i * 48, 50, 32, 32, 0.11f, rgb(255, 140, 20));
     }
-    text("SHIFT", TOP_W / 2, 92, 1.3f, fg_color(black), 0);
+    text("SHIFT", TOP_W / 2, 92, 1.3f, fg_color(f), 0);
     char buf[64];
     snprintf(buf, sizeof buf, "<  Level %d: %s  >", sel + 1, LEVEL_NAMES[sel]);
-    text(buf, TOP_W / 2, 170, 0.6f, fg_color(!black), 0);
-    text("Press A to play      START to quit", TOP_W / 2, 204, 0.5f, fg_color(!black), 0);
+    text(buf, TOP_W / 2, 170, 0.6f, fg_color(!f), 0);
+    text("Press A to play      START to quit", TOP_W / 2, 204, 0.5f, fg_color(!f), 0);
 }
 
 // ------------------------------------------------------------------ main --
