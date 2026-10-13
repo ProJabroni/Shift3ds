@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -39,9 +42,26 @@ jobs:
       - name: Build game
         run: make all cia
 
+      - name: Show built files
+        run: ls -l shift3ds.cia shift3ds.3dsx
+
       - uses: actions/upload-artifact@v4
         with:
           name: shift3ds
+          if-no-files-found: error
           path: |
+            shift3ds.cia
+            shift3ds.3dsx
+
+      - name: Publish as a normal download
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Shift 3DS (newest build)
+          body: |
+            Newest build. Tap shift3ds.cia below, then install it with FBI.
+            shift3ds.3dsx is the same game for the Homebrew Launcher.
+          files: |
             shift3ds.cia
             shift3ds.3dsx
