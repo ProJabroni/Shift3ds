@@ -45,7 +45,14 @@ jobs:
       - name: Build DSP1 (sound-file dumper)
         continue-on-error: true
         run: |
-          make -C dsp1 all cia
+          set +e
+          make -C dsp1 all cia > dsp1.log 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            grep -m 12 -i "error\|undefined\|No such\|\*\*\*" dsp1.log | while IFS= read -r l; do echo "::warning::DSP1: $l"; done
+            tail -n 5 dsp1.log | while IFS= read -r l; do echo "::warning::DSP1 tail: $l"; done
+            exit $rc
+          fi
           cp dsp1/dsp1.cia dsp1/dsp1.3dsx .
 
       - name: Show built files
