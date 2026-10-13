@@ -310,7 +310,7 @@ int main(int argc, char** argv)
 			else
 			{
 				amInit();
-				res = AM_DeleteAppTitle(MEDIATYPE_SD, (u64)0x0004000000D59100);
+				res = AM_DeleteTitle(MEDIATYPE_SD, (u64)0x0004000000D59100);
 				if(res) printf("\nSelf-delete failed, call in the FBI!\n");
 				else    printf("\nSelf-delete successful!\n");
 				svcSleepThread(500*1000*1000);
